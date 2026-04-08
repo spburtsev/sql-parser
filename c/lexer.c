@@ -36,6 +36,8 @@ static TokenKind match_keyword(const char *start, u64 len) {
     if (keyword_matches(start, len, "and", 3))    return TOK_AND;
     if (keyword_matches(start, len, "or", 2))     return TOK_OR;
     if (keyword_matches(start, len, "not", 3))    return TOK_NOT;
+    if (keyword_matches(start, len, "create", 6)) return TOK_CREATE;
+    if (keyword_matches(start, len, "table", 5))  return TOK_TABLE;
     return TOK_IDENTIFIER;
 }
 

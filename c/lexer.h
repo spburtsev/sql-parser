@@ -15,6 +15,8 @@ typedef enum {
     TOK_AND,
     TOK_OR,
     TOK_NOT,
+    TOK_CREATE,
+    TOK_TABLE,
     TOK_IDENTIFIER,
     TOK_INTEGER,
     TOK_STRING,

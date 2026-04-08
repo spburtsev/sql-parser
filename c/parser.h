@@ -17,7 +17,10 @@ typedef enum {
     SQL_ERR_EXPECTED_EXPRESSION,
     SQL_ERR_UNTERMINATED_STRING,
     SQL_ERR_EXPECTED_BY,
-    SQL_ERR_EXPECTED_ORDER_EXPR
+    SQL_ERR_EXPECTED_ORDER_EXPR,
+    SQL_ERR_EXPECTED_TABLE,
+    SQL_ERR_EXPECTED_COLUMN_NAME,
+    SQL_ERR_EXPECTED_COLUMN_TYPE
 } SqlErrorCode;
 
 typedef enum {
@@ -46,7 +49,7 @@ struct Expr {
     };
 };
 
-typedef enum { STMT_SELECT } StmtKind;
+typedef enum { STMT_SELECT, STMT_CREATE_TABLE } StmtKind;
 
 typedef enum { ORDER_ASC, ORDER_DESC } OrderDirection;
 
@@ -67,9 +70,24 @@ typedef struct {
 } SelectStmt;
 
 typedef struct {
+    const char *name;
+    u64 name_len;
+    const char *type_name;
+    u64 type_name_len;
+} ColumnDef;
+
+typedef struct {
+    const char *table_name;
+    u64 table_name_len;
+    ColumnDef *columns;
+    u64 column_count;
+} CreateTableStmt;
+
+typedef struct {
     StmtKind kind;
     union {
         SelectStmt select;
+        CreateTableStmt create_table;
     };
 } SqlStmt;
 

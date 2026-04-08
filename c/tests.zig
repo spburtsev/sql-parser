@@ -254,3 +254,89 @@ test "unterminated string" {
 test "order missing by" {
     try expectEnum(sql.SQL_ERR_EXPECTED_BY, parse("SELECT a FROM t ORDER a").err_code);
 }
+
+// --- CREATE TABLE ---
+
+fn ct(r: sql.SqlParseResult) sql.CreateTableStmt {
+    return r.statement.unnamed_0.create_table;
+}
+
+test "create table basic" {
+    const r = parse("CREATE TABLE users (id INT, name VARCHAR(255))");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    try expectEnum(sql.STMT_CREATE_TABLE, r.statement.kind);
+    const stmt = ct(r);
+    try strEql(stmt.table_name, stmt.table_name_len, "users");
+    try testing.expectEqual(@as(u64, 2), stmt.column_count);
+
+    try strEql(stmt.columns[0].name, stmt.columns[0].name_len, "id");
+    try strEql(stmt.columns[0].type_name, stmt.columns[0].type_name_len, "INT");
+
+    try strEql(stmt.columns[1].name, stmt.columns[1].name_len, "name");
+    try strEql(stmt.columns[1].type_name, stmt.columns[1].type_name_len, "VARCHAR(255)");
+}
+
+test "create table single column" {
+    const r = parse("CREATE TABLE t (id INT)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try strEql(stmt.table_name, stmt.table_name_len, "t");
+    try testing.expectEqual(@as(u64, 1), stmt.column_count);
+    try strEql(stmt.columns[0].name, stmt.columns[0].name_len, "id");
+    try strEql(stmt.columns[0].type_name, stmt.columns[0].type_name_len, "INT");
+}
+
+test "create table many columns" {
+    const r = parse("CREATE TABLE t (a INT, b TEXT, c BOOLEAN)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try testing.expectEqual(@as(u64, 3), stmt.column_count);
+    try strEql(stmt.columns[0].name, stmt.columns[0].name_len, "a");
+    try strEql(stmt.columns[0].type_name, stmt.columns[0].type_name_len, "INT");
+    try strEql(stmt.columns[1].name, stmt.columns[1].name_len, "b");
+    try strEql(stmt.columns[1].type_name, stmt.columns[1].type_name_len, "TEXT");
+    try strEql(stmt.columns[2].name, stmt.columns[2].name_len, "c");
+    try strEql(stmt.columns[2].type_name, stmt.columns[2].type_name_len, "BOOLEAN");
+}
+
+test "create table with semicolon" {
+    const r = parse("CREATE TABLE t (x INT);");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    try expectEnum(sql.STMT_CREATE_TABLE, r.statement.kind);
+}
+
+test "create table case insensitive" {
+    const r = parse("create table Users (Id int)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try strEql(stmt.table_name, stmt.table_name_len, "Users");
+    try strEql(stmt.columns[0].name, stmt.columns[0].name_len, "Id");
+    try strEql(stmt.columns[0].type_name, stmt.columns[0].type_name_len, "int");
+}
+
+test "create table decimal type" {
+    const r = parse("CREATE TABLE t (price DECIMAL(10,2))");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try strEql(stmt.columns[0].type_name, stmt.columns[0].type_name_len, "DECIMAL(10,2)");
+}
+
+test "create table missing table keyword" {
+    try expectEnum(sql.SQL_ERR_EXPECTED_TABLE, parse("CREATE users (id INT)").err_code);
+}
+
+test "create table missing table name" {
+    try expectEnum(sql.SQL_ERR_EXPECTED_TABLE_NAME, parse("CREATE TABLE (id INT)").err_code);
+}
+
+test "create table missing lparen" {
+    try expectEnum(sql.SQL_ERR_EXPECTED_LPAREN, parse("CREATE TABLE t id INT)").err_code);
+}
+
+test "create table missing column type" {
+    try expectEnum(sql.SQL_ERR_EXPECTED_COLUMN_TYPE, parse("CREATE TABLE t (id)").err_code);
+}
+
+test "create table missing rparen" {
+    try expectEnum(sql.SQL_ERR_EXPECTED_RPAREN, parse("CREATE TABLE t (id INT").err_code);
+}

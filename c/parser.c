@@ -344,32 +344,20 @@ static OrderByResult parse_order_by(Arena *arena, Lexer *lexer) {
         .ok = true, .items = items, .count = count};
 }
 
-// --- Main entry point ---
+// --- SELECT statement parser ---
 
-SqlParseResult parse_statement(Arena *arena, const char *text) {
-    Lexer lexer = lexer_create(text);
-
-    Token tok = lexer_peek(&lexer);
-    if (tok.kind == TOK_EOF) {
-        return make_error(SQL_ERR_EMPTY_INPUT, 0);
-    }
-
-    tok = lexer_next(&lexer);
-    if (tok.kind != TOK_SELECT) {
-        return make_error(SQL_ERR_UNEXPECTED_TOKEN, tok.position);
-    }
-
-    SelectListResult slr = parse_select_list(arena, &lexer);
+static SqlParseResult parse_select(Arena *arena, Lexer *lexer) {
+    SelectListResult slr = parse_select_list(arena, lexer);
     if (!slr.ok) {
         return make_error(slr.err, slr.err_pos);
     }
 
-    tok = lexer_next(&lexer);
+    Token tok = lexer_next(lexer);
     if (tok.kind != TOK_FROM) {
         return make_error(SQL_ERR_EXPECTED_FROM, tok.position);
     }
 
-    tok = lexer_next(&lexer);
+    tok = lexer_next(lexer);
     if (tok.kind != TOK_IDENTIFIER) {
         return make_error(SQL_ERR_EXPECTED_TABLE_NAME, tok.position);
     }
@@ -379,9 +367,9 @@ SqlParseResult parse_statement(Arena *arena, const char *text) {
 
     // Optional WHERE
     Expr *where_clause = NULL;
-    if (lexer_peek(&lexer).kind == TOK_WHERE) {
-        lexer_next(&lexer);
-        ExprResult wr = parse_where(arena, &lexer);
+    if (lexer_peek(lexer).kind == TOK_WHERE) {
+        lexer_next(lexer);
+        ExprResult wr = parse_where(arena, lexer);
         if (!wr.ok) {
             return make_error(wr.err, wr.err_pos);
         }
@@ -391,9 +379,9 @@ SqlParseResult parse_statement(Arena *arena, const char *text) {
     // Optional ORDER BY
     OrderByItem *order_by = NULL;
     u64 order_by_count = 0;
-    if (lexer_peek(&lexer).kind == TOK_ORDER) {
-        lexer_next(&lexer);
-        OrderByResult obr = parse_order_by(arena, &lexer);
+    if (lexer_peek(lexer).kind == TOK_ORDER) {
+        lexer_next(lexer);
+        OrderByResult obr = parse_order_by(arena, lexer);
         if (!obr.ok) {
             return make_error(obr.err, obr.err_pos);
         }
@@ -403,18 +391,13 @@ SqlParseResult parse_statement(Arena *arena, const char *text) {
 
     // Optional LIMIT
     Expr *limit = NULL;
-    if (lexer_peek(&lexer).kind == TOK_LIMIT) {
-        lexer_next(&lexer);
-        ExprResult lr = parse_or_expr(arena, &lexer);
+    if (lexer_peek(lexer).kind == TOK_LIMIT) {
+        lexer_next(lexer);
+        ExprResult lr = parse_or_expr(arena, lexer);
         if (!lr.ok) {
             return make_error(lr.err, lr.err_pos);
         }
         limit = lr.expr;
-    }
-
-    // Optional semicolon
-    if (lexer_peek(&lexer).kind == TOK_SEMICOLON) {
-        lexer_next(&lexer);
     }
 
     return (SqlParseResult){
@@ -432,4 +415,162 @@ SqlParseResult parse_statement(Arena *arena, const char *text) {
                 .order_by_count = order_by_count,
                 .limit = limit,
             }}};
+}
+
+// --- CREATE TABLE parser ---
+
+static SqlParseResult parse_create_table(Arena *arena, Lexer *lexer) {
+    Token tok = lexer_next(lexer);
+    if (tok.kind != TOK_TABLE) {
+        return make_error(SQL_ERR_EXPECTED_TABLE, tok.position);
+    }
+
+    tok = lexer_next(lexer);
+    if (tok.kind != TOK_IDENTIFIER) {
+        return make_error(SQL_ERR_EXPECTED_TABLE_NAME, tok.position);
+    }
+
+    char *table_name = copy_to_arena(arena, tok.start, tok.length);
+    u64 table_name_len = tok.length;
+
+    tok = lexer_next(lexer);
+    if (tok.kind != TOK_LPAREN) {
+        return make_error(SQL_ERR_EXPECTED_LPAREN, tok.position);
+    }
+
+    // Two-pass: count columns, then allocate and parse
+    u64 saved_pos = lexer->position;
+    u64 count = 0;
+    bool missing_type = false;
+    u64 missing_type_pos = 0;
+
+    while (true) {
+        Token name_tok = lexer_peek(lexer);
+        if (name_tok.kind != TOK_IDENTIFIER) break;
+        lexer_next(lexer); // consume name
+
+        // Type must be an identifier or keyword used as type name
+        Token type_tok = lexer_peek(lexer);
+        if (type_tok.kind == TOK_RPAREN || type_tok.kind == TOK_COMMA ||
+            type_tok.kind == TOK_EOF) {
+            missing_type = true;
+            missing_type_pos = type_tok.position;
+            break;
+        }
+        lexer_next(lexer); // consume type
+
+        // Skip optional type parameters like (255) or (10,2)
+        if (lexer_peek(lexer).kind == TOK_LPAREN) {
+            lexer_next(lexer);
+            while (lexer_peek(lexer).kind != TOK_RPAREN &&
+                   lexer_peek(lexer).kind != TOK_EOF) {
+                lexer_next(lexer);
+            }
+            if (lexer_peek(lexer).kind == TOK_RPAREN) {
+                lexer_next(lexer);
+            }
+        }
+
+        count++;
+        if (lexer_peek(lexer).kind != TOK_COMMA) break;
+        lexer_next(lexer); // consume comma
+    }
+
+    if (missing_type) {
+        return make_error(SQL_ERR_EXPECTED_COLUMN_TYPE, missing_type_pos);
+    }
+
+    lexer->position = saved_pos;
+
+    ColumnDef *columns = arena_alloc(arena, count * sizeof(ColumnDef), _Alignof(ColumnDef));
+
+    for (u64 i = 0; i < count; i++) {
+        Token name_tok = lexer_next(lexer);
+        if (name_tok.kind != TOK_IDENTIFIER) {
+            return make_error(SQL_ERR_EXPECTED_COLUMN_NAME, name_tok.position);
+        }
+
+        Token type_tok = lexer_next(lexer);
+        if (type_tok.kind == TOK_EOF || type_tok.kind == TOK_RPAREN ||
+            type_tok.kind == TOK_COMMA) {
+            return make_error(SQL_ERR_EXPECTED_COLUMN_TYPE, type_tok.position);
+        }
+
+        // Type name starts at type_tok; may extend with parenthesized params
+        const char *type_start = type_tok.start;
+        u64 type_end = (u64)(type_tok.start - lexer->source) + type_tok.length;
+
+        if (lexer_peek(lexer).kind == TOK_LPAREN) {
+            lexer_next(lexer); // consume (
+            while (lexer_peek(lexer).kind != TOK_RPAREN &&
+                   lexer_peek(lexer).kind != TOK_EOF) {
+                lexer_next(lexer);
+            }
+            if (lexer_peek(lexer).kind == TOK_RPAREN) {
+                Token rp = lexer_next(lexer);
+                type_end = (u64)(rp.start - lexer->source) + rp.length;
+            }
+        }
+
+        u64 type_len = type_end - (u64)(type_start - lexer->source);
+
+        columns[i].name = copy_to_arena(arena, name_tok.start, name_tok.length);
+        columns[i].name_len = name_tok.length;
+        columns[i].type_name = copy_to_arena(arena, type_start, type_len);
+        columns[i].type_name_len = type_len;
+
+        if (i + 1 < count) {
+            lexer_next(lexer); // consume comma
+        }
+    }
+
+    tok = lexer_next(lexer);
+    if (tok.kind != TOK_RPAREN) {
+        return make_error(SQL_ERR_EXPECTED_RPAREN, tok.position);
+    }
+
+    return (SqlParseResult){
+        .err_code = SQL_OK,
+        .err_pos = 0,
+        .statement = {
+            .kind = STMT_CREATE_TABLE,
+            .create_table = {
+                .table_name = table_name,
+                .table_name_len = table_name_len,
+                .columns = columns,
+                .column_count = count,
+            }}};
+}
+
+// --- Main entry point ---
+
+SqlParseResult parse_statement(Arena *arena, const char *text) {
+    Lexer lexer = lexer_create(text);
+
+    Token tok = lexer_peek(&lexer);
+    if (tok.kind == TOK_EOF) {
+        return make_error(SQL_ERR_EMPTY_INPUT, 0);
+    }
+
+    tok = lexer_next(&lexer);
+
+    if (tok.kind == TOK_SELECT) {
+        SqlParseResult result = parse_select(arena, &lexer);
+        // Optional semicolon
+        if (result.err_code == SQL_OK && lexer_peek(&lexer).kind == TOK_SEMICOLON) {
+            lexer_next(&lexer);
+        }
+        return result;
+    }
+
+    if (tok.kind == TOK_CREATE) {
+        SqlParseResult result = parse_create_table(arena, &lexer);
+        // Optional semicolon
+        if (result.err_code == SQL_OK && lexer_peek(&lexer).kind == TOK_SEMICOLON) {
+            lexer_next(&lexer);
+        }
+        return result;
+    }
+
+    return make_error(SQL_ERR_UNEXPECTED_TOKEN, tok.position);
 }
