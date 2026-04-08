@@ -79,5 +79,14 @@ typedef struct {
     SqlStmt statement;
 } SqlParseResult;
 
-[[nodiscard]]
-SQL_EXPORT SqlParseResult parse_statement(Arena *arena, const char *text);
+#ifdef __has_c_attribute
+  #if __has_c_attribute(nodiscard)
+    #define SQL_NODISCARD [[nodiscard]]
+  #else
+    #define SQL_NODISCARD
+  #endif
+#else
+  #define SQL_NODISCARD
+#endif
+
+SQL_NODISCARD SQL_EXPORT SqlParseResult parse_statement(Arena *arena, const char *text);
