@@ -340,3 +340,84 @@ test "create table missing column type" {
 test "create table missing rparen" {
     try expectEnum(sql.SQL_ERR_EXPECTED_RPAREN, parse("CREATE TABLE t (id INT").err_code);
 }
+
+// --- Column constraints ---
+
+test "create table not null" {
+    const r = parse("CREATE TABLE t (id INT NOT NULL)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try testing.expectEqual(@as(u64, 1), stmt.column_count);
+    try strEql(stmt.columns[0].type_name, stmt.columns[0].type_name_len, "INT");
+    try testing.expect(stmt.columns[0].not_null);
+    try testing.expect(!stmt.columns[0].is_primary_key);
+    try testing.expect(!stmt.columns[0].is_unique);
+}
+
+test "create table explicit null" {
+    const r = parse("CREATE TABLE t (id INT NULL)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try testing.expect(!stmt.columns[0].not_null);
+}
+
+test "create table primary key" {
+    const r = parse("CREATE TABLE t (id INT PRIMARY KEY)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try testing.expect(stmt.columns[0].is_primary_key);
+    try testing.expect(!stmt.columns[0].not_null);
+}
+
+test "create table unique" {
+    const r = parse("CREATE TABLE t (email VARCHAR(255) UNIQUE)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try strEql(stmt.columns[0].type_name, stmt.columns[0].type_name_len, "VARCHAR(255)");
+    try testing.expect(stmt.columns[0].is_unique);
+}
+
+test "create table default int" {
+    const r = parse("CREATE TABLE t (age INT DEFAULT 0)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try expectEnum(sql.DEFAULT_INT, stmt.columns[0].default_value.kind);
+    try testing.expectEqual(@as(i64, 0), stmt.columns[0].default_value.unnamed_0.int_value);
+}
+
+test "create table default string" {
+    const r = parse("CREATE TABLE t (status TEXT DEFAULT 'active')");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try expectEnum(sql.DEFAULT_STR, stmt.columns[0].default_value.kind);
+    try strEql(
+        stmt.columns[0].default_value.unnamed_0.str_value.value,
+        stmt.columns[0].default_value.unnamed_0.str_value.value_len,
+        "active",
+    );
+}
+
+test "create table multiple modifiers" {
+    const r = parse("CREATE TABLE t (id INT NOT NULL PRIMARY KEY)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try testing.expect(stmt.columns[0].not_null);
+    try testing.expect(stmt.columns[0].is_primary_key);
+}
+
+test "create table mixed columns with constraints" {
+    const r = parse("CREATE TABLE t (id INT NOT NULL PRIMARY KEY, name TEXT NOT NULL, age INT DEFAULT 0)");
+    try expectEnum(sql.SQL_OK, r.err_code);
+    const stmt = ct(r);
+    try testing.expectEqual(@as(u64, 3), stmt.column_count);
+
+    try testing.expect(stmt.columns[0].not_null);
+    try testing.expect(stmt.columns[0].is_primary_key);
+
+    try testing.expect(stmt.columns[1].not_null);
+    try testing.expect(!stmt.columns[1].is_primary_key);
+
+    try testing.expect(!stmt.columns[2].not_null);
+    try expectEnum(sql.DEFAULT_INT, stmt.columns[2].default_value.kind);
+    try testing.expectEqual(@as(i64, 0), stmt.columns[2].default_value.unnamed_0.int_value);
+}

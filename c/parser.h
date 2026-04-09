@@ -69,11 +69,30 @@ typedef struct {
     Expr *limit;
 } SelectStmt;
 
+typedef enum {
+    DEFAULT_NONE = 0,
+    DEFAULT_INT,
+    DEFAULT_STR,
+    DEFAULT_NULL,
+} DefaultValueKind;
+
+typedef struct {
+    DefaultValueKind kind;
+    union {
+        s64 int_value;
+        struct { const char *value; u64 value_len; } str_value;
+    };
+} DefaultValue;
+
 typedef struct {
     const char *name;
     u64 name_len;
     const char *type_name;
     u64 type_name_len;
+    bool not_null;
+    bool is_primary_key;
+    bool is_unique;
+    DefaultValue default_value;
 } ColumnDef;
 
 typedef struct {

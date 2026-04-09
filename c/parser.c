@@ -417,6 +417,108 @@ static SqlParseResult parse_select(Arena *arena, Lexer *lexer) {
             }}};
 }
 
+// --- Column constraint helpers ---
+
+static void skip_column_constraints(Lexer *lexer) {
+    while (true) {
+        Token peek = lexer_peek(lexer);
+        if (peek.kind == TOK_NOT) {
+            lexer_next(lexer);
+            if (lexer_peek(lexer).kind == TOK_NULL) {
+                lexer_next(lexer);
+            }
+        } else if (peek.kind == TOK_NULL) {
+            lexer_next(lexer);
+        } else if (peek.kind == TOK_PRIMARY) {
+            lexer_next(lexer);
+            if (lexer_peek(lexer).kind == TOK_KEY) {
+                lexer_next(lexer);
+            }
+        } else if (peek.kind == TOK_UNIQUE) {
+            lexer_next(lexer);
+        } else if (peek.kind == TOK_DEFAULT) {
+            lexer_next(lexer);
+            Token val = lexer_peek(lexer);
+            if (val.kind == TOK_INTEGER || val.kind == TOK_STRING ||
+                val.kind == TOK_NULL) {
+                lexer_next(lexer);
+            }
+        } else {
+            break;
+        }
+    }
+}
+
+typedef struct {
+    bool ok;
+    SqlErrorCode err;
+    u64 err_pos;
+    bool not_null;
+    bool is_primary_key;
+    bool is_unique;
+    DefaultValue default_value;
+} ConstraintResult;
+
+static ConstraintResult parse_column_constraints(Arena *arena, Lexer *lexer) {
+    ConstraintResult result = {.ok = true};
+    while (true) {
+        Token peek = lexer_peek(lexer);
+        if (peek.kind == TOK_NOT) {
+            lexer_next(lexer);
+            Token null_tok = lexer_peek(lexer);
+            if (null_tok.kind == TOK_NULL) {
+                lexer_next(lexer);
+                result.not_null = true;
+            } else {
+                result.ok = false;
+                result.err = SQL_ERR_UNEXPECTED_TOKEN;
+                result.err_pos = null_tok.position;
+                return result;
+            }
+        } else if (peek.kind == TOK_NULL) {
+            lexer_next(lexer);
+        } else if (peek.kind == TOK_PRIMARY) {
+            lexer_next(lexer);
+            if (lexer_peek(lexer).kind == TOK_KEY) {
+                lexer_next(lexer);
+            }
+            result.is_primary_key = true;
+        } else if (peek.kind == TOK_UNIQUE) {
+            lexer_next(lexer);
+            result.is_unique = true;
+        } else if (peek.kind == TOK_DEFAULT) {
+            lexer_next(lexer);
+            Token val = lexer_peek(lexer);
+            if (val.kind == TOK_INTEGER) {
+                lexer_next(lexer);
+                s64 v = 0;
+                for (u64 i = 0; i < val.length; i++) {
+                    v = v * 10 + (val.start[i] - '0');
+                }
+                result.default_value.kind = DEFAULT_INT;
+                result.default_value.int_value = v;
+            } else if (val.kind == TOK_STRING) {
+                lexer_next(lexer);
+                result.default_value.kind = DEFAULT_STR;
+                result.default_value.str_value.value =
+                    copy_to_arena(arena, val.start, val.length);
+                result.default_value.str_value.value_len = val.length;
+            } else if (val.kind == TOK_NULL) {
+                lexer_next(lexer);
+                result.default_value.kind = DEFAULT_NULL;
+            } else {
+                result.ok = false;
+                result.err = SQL_ERR_EXPECTED_EXPRESSION;
+                result.err_pos = val.position;
+                return result;
+            }
+        } else {
+            break;
+        }
+    }
+    return result;
+}
+
 // --- CREATE TABLE parser ---
 
 static SqlParseResult parse_create_table(Arena *arena, Lexer *lexer) {
@@ -471,6 +573,8 @@ static SqlParseResult parse_create_table(Arena *arena, Lexer *lexer) {
             }
         }
 
+        skip_column_constraints(lexer);
+
         count++;
         if (lexer_peek(lexer).kind != TOK_COMMA) break;
         lexer_next(lexer); // consume comma
@@ -518,6 +622,15 @@ static SqlParseResult parse_create_table(Arena *arena, Lexer *lexer) {
         columns[i].name_len = name_tok.length;
         columns[i].type_name = copy_to_arena(arena, type_start, type_len);
         columns[i].type_name_len = type_len;
+
+        ConstraintResult cr = parse_column_constraints(arena, lexer);
+        if (!cr.ok) {
+            return make_error(cr.err, cr.err_pos);
+        }
+        columns[i].not_null = cr.not_null;
+        columns[i].is_primary_key = cr.is_primary_key;
+        columns[i].is_unique = cr.is_unique;
+        columns[i].default_value = cr.default_value;
 
         if (i + 1 < count) {
             lexer_next(lexer); // consume comma
